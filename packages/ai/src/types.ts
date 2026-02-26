@@ -109,6 +109,13 @@ export interface SimpleStreamOptions extends StreamOptions {
 	reasoning?: ThinkingLevel;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
+	/**
+	 * Enable preserved thinking for providers that support it (e.g., Z.ai GLM-5).
+	 * When true, reasoning_content is retained across conversation turns for
+	 * more coherent long-horizon reasoning.
+	 * Default: false
+	 */
+	preserveThinking?: boolean;
 }
 
 // Generic StreamFunction with typed options
