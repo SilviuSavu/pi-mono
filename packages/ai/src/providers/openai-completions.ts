@@ -428,10 +428,11 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 	if (compat.thinkingFormat === "zai" && model.reasoning) {
 		// Z.ai uses binary thinking: { type: "enabled" | "disabled" }
 		// Must explicitly disable since z.ai defaults to thinking enabled
-		// When preserveThinking is true, set clear_history: false to retain reasoning across turns
+		// When preserveThinking is true, set clear_history/clear_thinking: false to retain reasoning across turns
+		// Note: API docs say clear_history, guide examples say clear_thinking - using both for compatibility
 		(params as any).thinking = {
 			type: options?.reasoningEffort ? "enabled" : "disabled",
-			...(options?.preserveThinking && { clear_history: false }),
+			...(options?.preserveThinking && { clear_history: false, clear_thinking: false }),
 		};
 	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
 		// Qwen uses enable_thinking: boolean
