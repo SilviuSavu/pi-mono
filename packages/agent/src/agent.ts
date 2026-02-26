@@ -91,6 +91,14 @@ export interface AgentOptions {
 	 * Default: 60000 (60 seconds). Set to 0 to disable the cap.
 	 */
 	maxRetryDelayMs?: number;
+
+	/**
+	 * Enable preserved thinking for providers that support it (e.g., Z.ai GLM-5).
+	 * When true, reasoning_content is retained across conversation turns for
+	 * more coherent long-horizon reasoning.
+	 * Default: false
+	 */
+	preserveThinking?: boolean;
 }
 
 export class Agent {
@@ -122,6 +130,7 @@ export class Agent {
 	private _thinkingBudgets?: ThinkingBudgets;
 	private _transport: Transport;
 	private _maxRetryDelayMs?: number;
+	private _preserveThinking = false;
 
 	constructor(opts: AgentOptions = {}) {
 		this._state = { ...this._state, ...opts.initialState };
@@ -135,6 +144,7 @@ export class Agent {
 		this._thinkingBudgets = opts.thinkingBudgets;
 		this._transport = opts.transport ?? "sse";
 		this._maxRetryDelayMs = opts.maxRetryDelayMs;
+		this._preserveThinking = opts.preserveThinking ?? false;
 	}
 
 	/**
@@ -193,6 +203,21 @@ export class Agent {
 	 */
 	set maxRetryDelayMs(value: number | undefined) {
 		this._maxRetryDelayMs = value;
+	}
+
+	/**
+	 * Get whether preserved thinking is enabled (for Z.ai GLM-5).
+	 * When true, reasoning_content is retained across conversation turns.
+	 */
+	get preserveThinking(): boolean {
+		return this._preserveThinking;
+	}
+
+	/**
+	 * Set whether preserved thinking is enabled.
+	 */
+	set preserveThinking(value: boolean) {
+		this._preserveThinking = value;
 	}
 
 	get state(): AgentState {
@@ -341,7 +366,7 @@ export class Agent {
 		}
 
 		const model = this._state.model;
-		if (!model) throw new Error("No model configured");
+		if (\!model) throw new Error("No model configured");
 
 		let msgs: AgentMessage[];
 
@@ -404,7 +429,7 @@ export class Agent {
 	 */
 	private async _runLoop(messages?: AgentMessage[], options?: { skipInitialSteeringPoll?: boolean }) {
 		const model = this._state.model;
-		if (!model) throw new Error("No model configured");
+		if (\!model) throw new Error("No model configured");
 
 		this.runningPrompt = new Promise<void>((resolve) => {
 			this.resolveRunningPrompt = resolve;
@@ -433,6 +458,7 @@ export class Agent {
 			thinkingBudgets: this._thinkingBudgets,
 			maxRetryDelayMs: this._maxRetryDelayMs,
 			convertToLlm: this.convertToLlm,
+			preserveThinking: this._preserveThinking,
 			transformContext: this.transformContext,
 			getApiKey: this.getApiKey,
 			getSteeringMessages: async () => {
@@ -503,13 +529,13 @@ export class Agent {
 
 			// Handle any remaining partial message
 			if (partial && partial.role === "assistant" && partial.content.length > 0) {
-				const onlyEmpty = !partial.content.some(
+				const onlyEmpty = \!partial.content.some(
 					(c) =>
 						(c.type === "thinking" && c.thinking.trim().length > 0) ||
 						(c.type === "text" && c.text.trim().length > 0) ||
 						(c.type === "toolCall" && c.name.trim().length > 0),
 				);
-				if (!onlyEmpty) {
+				if (\!onlyEmpty) {
 					this.appendMessage(partial);
 				} else {
 					if (this.abortController?.signal.aborted) {
