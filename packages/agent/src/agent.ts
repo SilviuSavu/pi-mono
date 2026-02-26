@@ -93,10 +93,8 @@ export interface AgentOptions {
 	maxRetryDelayMs?: number;
 
 	/**
-	 * Enable preserved thinking for providers that support it (e.g., Z.ai GLM-5).
-	 * When true, reasoning_content is retained across conversation turns for
-	 * more coherent long-horizon reasoning.
-	 * Default: false
+	 * Preserve thinking across conversation turns (for models like GLM-5).
+	 * When true, includes clear_history: false in the thinking parameter.
 	 */
 	preserveThinking?: boolean;
 }
@@ -130,7 +128,7 @@ export class Agent {
 	private _thinkingBudgets?: ThinkingBudgets;
 	private _transport: Transport;
 	private _maxRetryDelayMs?: number;
-	private _preserveThinking = false;
+	private _preserveThinking?: boolean;
 
 	constructor(opts: AgentOptions = {}) {
 		this._state = { ...this._state, ...opts.initialState };
@@ -144,7 +142,7 @@ export class Agent {
 		this._thinkingBudgets = opts.thinkingBudgets;
 		this._transport = opts.transport ?? "sse";
 		this._maxRetryDelayMs = opts.maxRetryDelayMs;
-		this._preserveThinking = opts.preserveThinking ?? false;
+		this._preserveThinking = opts.preserveThinking;
 	}
 
 	/**
@@ -206,17 +204,17 @@ export class Agent {
 	}
 
 	/**
-	 * Get whether preserved thinking is enabled (for Z.ai GLM-5).
-	 * When true, reasoning_content is retained across conversation turns.
+	 * Get whether thinking is preserved across turns.
 	 */
-	get preserveThinking(): boolean {
+	get preserveThinking(): boolean | undefined {
 		return this._preserveThinking;
 	}
 
 	/**
-	 * Set whether preserved thinking is enabled.
+	 * Set whether thinking should be preserved across turns.
+	 * For GLM-5, this adds clear_history: false to the thinking parameter.
 	 */
-	set preserveThinking(value: boolean) {
+	set preserveThinking(value: boolean | undefined) {
 		this._preserveThinking = value;
 	}
 
@@ -366,7 +364,7 @@ export class Agent {
 		}
 
 		const model = this._state.model;
-		if (\!model) throw new Error("No model configured");
+		if (!model) throw new Error("No model configured");
 
 		let msgs: AgentMessage[];
 
@@ -429,7 +427,7 @@ export class Agent {
 	 */
 	private async _runLoop(messages?: AgentMessage[], options?: { skipInitialSteeringPoll?: boolean }) {
 		const model = this._state.model;
-		if (\!model) throw new Error("No model configured");
+		if (!model) throw new Error("No model configured");
 
 		this.runningPrompt = new Promise<void>((resolve) => {
 			this.resolveRunningPrompt = resolve;
@@ -457,8 +455,8 @@ export class Agent {
 			transport: this._transport,
 			thinkingBudgets: this._thinkingBudgets,
 			maxRetryDelayMs: this._maxRetryDelayMs,
-			convertToLlm: this.convertToLlm,
 			preserveThinking: this._preserveThinking,
+			convertToLlm: this.convertToLlm,
 			transformContext: this.transformContext,
 			getApiKey: this.getApiKey,
 			getSteeringMessages: async () => {
@@ -529,13 +527,13 @@ export class Agent {
 
 			// Handle any remaining partial message
 			if (partial && partial.role === "assistant" && partial.content.length > 0) {
-				const onlyEmpty = \!partial.content.some(
+				const onlyEmpty = !partial.content.some(
 					(c) =>
 						(c.type === "thinking" && c.thinking.trim().length > 0) ||
 						(c.type === "text" && c.text.trim().length > 0) ||
 						(c.type === "toolCall" && c.name.trim().length > 0),
 				);
-				if (\!onlyEmpty) {
+				if (!onlyEmpty) {
 					this.appendMessage(partial);
 				} else {
 					if (this.abortController?.signal.aborted) {
