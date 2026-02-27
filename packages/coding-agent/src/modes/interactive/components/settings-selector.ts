@@ -32,6 +32,7 @@ export interface SettingsConfig {
 	followUpMode: "all" | "one-at-a-time";
 	transport: Transport;
 	thinkingLevel: ThinkingLevel;
+	preserveThinking: boolean;
 	availableThinkingLevels: ThinkingLevel[];
 	currentTheme: string;
 	availableThemes: string[];
@@ -55,6 +56,7 @@ export interface SettingsCallbacks {
 	onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
 	onTransportChange: (transport: Transport) => void;
 	onThinkingLevelChange: (level: ThinkingLevel) => void;
+	onPreserveThinkingChange: (enabled: boolean) => void;
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
@@ -223,6 +225,13 @@ export class SettingsSelectorComponent extends Container {
 					),
 			},
 			{
+				id: "preserve-thinking",
+				label: "Preserve thinking",
+				description: "Keep provider reasoning state across turns when supported (e.g., Z.ai GLM-5)",
+				currentValue: config.preserveThinking ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "theme",
 				label: "Theme",
 				description: "Color theme for the interface",
@@ -366,6 +375,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "transport":
 						callbacks.onTransportChange(newValue as Transport);
+						break;
+					case "preserve-thinking":
+						callbacks.onPreserveThinkingChange(newValue === "true");
 						break;
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");

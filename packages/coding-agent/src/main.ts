@@ -488,6 +488,11 @@ function buildSessionOptions(
 		options.thinkingLevel = parsed.thinking;
 	}
 
+	// Preserve thinking state across turns (for providers like Z.ai GLM-5)
+	if (parsed.preserveThinking !== undefined) {
+		options.preserveThinking = parsed.preserveThinking;
+	}
+
 	// Scoped models for Ctrl+P cycling - fill in default thinking level for models without explicit level
 	if (scopedModels.length > 0) {
 		const defaultThinkingLevel = settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;

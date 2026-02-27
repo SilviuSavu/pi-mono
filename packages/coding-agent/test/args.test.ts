@@ -120,6 +120,21 @@ describe("parseArgs", () => {
 			expect(result.thinking).toBe("high");
 		});
 
+		test("parses --preserve-thinking", () => {
+			const result = parseArgs(["--preserve-thinking"]);
+			expect(result.preserveThinking).toBe(true);
+		});
+
+		test("parses --no-preserve-thinking", () => {
+			const result = parseArgs(["--no-preserve-thinking"]);
+			expect(result.preserveThinking).toBe(false);
+		});
+
+		test("last preserve-thinking flag wins", () => {
+			const result = parseArgs(["--preserve-thinking", "--no-preserve-thinking", "--preserve-thinking"]);
+			expect(result.preserveThinking).toBe(true);
+		});
+
 		test("parses --models as comma-separated list", () => {
 			const result = parseArgs(["--models", "gpt-4o,claude-sonnet,gemini-pro"]);
 			expect(result.models).toEqual(["gpt-4o", "claude-sonnet", "gemini-pro"]);

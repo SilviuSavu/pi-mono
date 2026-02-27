@@ -64,6 +64,7 @@ export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	preserveThinking?: boolean; // default: false
 	transport?: TransportSetting; // default: "sse"
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
@@ -565,6 +566,16 @@ export class SettingsManager {
 	setDefaultThinkingLevel(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {
 		this.globalSettings.defaultThinkingLevel = level;
 		this.markModified("defaultThinkingLevel");
+		this.save();
+	}
+
+	getPreserveThinking(): boolean {
+		return this.settings.preserveThinking ?? false;
+	}
+
+	setPreserveThinking(enabled: boolean): void {
+		this.globalSettings.preserveThinking = enabled;
+		this.markModified("preserveThinking");
 		this.save();
 	}
 

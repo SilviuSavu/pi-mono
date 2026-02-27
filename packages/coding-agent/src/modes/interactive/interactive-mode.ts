@@ -3041,6 +3041,7 @@ export class InteractiveMode {
 					followUpMode: this.session.followUpMode,
 					transport: this.settingsManager.getTransport(),
 					thinkingLevel: this.session.thinkingLevel,
+					preserveThinking: this.settingsManager.getPreserveThinking(),
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
 					currentTheme: this.settingsManager.getTheme() || "dark",
 					availableThemes: getAvailableThemes(),
@@ -3090,6 +3091,10 @@ export class InteractiveMode {
 						this.session.setThinkingLevel(level);
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
+					},
+					onPreserveThinkingChange: (enabled) => {
+						this.settingsManager.setPreserveThinking(enabled);
+						this.session.agent.preserveThinking = enabled;
 					},
 					onThemeChange: (themeName) => {
 						const result = setTheme(themeName, true);

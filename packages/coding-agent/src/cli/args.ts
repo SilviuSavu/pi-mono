@@ -16,6 +16,7 @@ export interface Args {
 	systemPrompt?: string;
 	appendSystemPrompt?: string;
 	thinking?: ThinkingLevel;
+	preserveThinking?: boolean;
 	continue?: boolean;
 	resume?: boolean;
 	help?: boolean;
@@ -119,6 +120,10 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 					),
 				);
 			}
+		} else if (arg === "--preserve-thinking") {
+			result.preserveThinking = true;
+		} else if (arg === "--no-preserve-thinking") {
+			result.preserveThinking = false;
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
 		} else if (arg === "--export" && i + 1 < args.length) {
@@ -209,6 +214,8 @@ ${chalk.bold("Options:")}
   --tools <tools>                Comma-separated list of tools to enable (default: read,bash,edit,write)
                                  Available: read, bash, edit, write, grep, find, ls
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh
+  --preserve-thinking            Preserve provider thinking state across turns when supported
+  --no-preserve-thinking         Disable preserving provider thinking state across turns
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
   --skill <path>                 Load a skill file or directory (can be used multiple times)
@@ -265,6 +272,9 @@ ${chalk.bold("Examples:")}
 
   # Start with a specific thinking level
   ${APP_NAME} --thinking high "Solve this complex problem"
+
+  # Preserve model reasoning state across turns (for providers like Z.ai GLM-5)
+  ${APP_NAME} --preserve-thinking
 
   # Read-only mode (no file modifications possible)
   ${APP_NAME} --tools read,grep,find,ls -p "Review the code in src/"
