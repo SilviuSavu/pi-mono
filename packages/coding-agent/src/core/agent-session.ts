@@ -334,6 +334,39 @@ export class AgentSession {
 			}
 		}
 
+		// Special case: message_update routes through streaming interceptor
+		if (event.type === "message_update" && this._extensionRunner) {
+			const extensionEvent: MessageUpdateEvent = {
+				type: "message_update",
+				message: event.message,
+				assistantMessageEvent: event.assistantMessageEvent,
+			};
+			const result = await this._extensionRunner.emitMessageUpdate(extensionEvent);
+
+			switch (result.outcome) {
+				case "hold":
+				case "suppressed":
+				case "aborted":
+					return; // do not call _emit
+				case "emit":
+					// Emit force-flushed buffer tokens before the boundary event
+					if (result.flushedEvent) {
+						this._emit({
+							...event,
+							assistantMessageEvent: result.flushedEvent.assistantMessageEvent,
+						});
+					}
+					this._emit(event);
+					return;
+				case "emit_modified":
+					this._emit({
+						...event,
+						assistantMessageEvent: result.event.assistantMessageEvent,
+					});
+					return;
+			}
+		}
+
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
 
@@ -342,6 +375,23 @@ export class AgentSession {
 
 		// Handle session persistence
 		if (event.type === "message_end") {
+			// Flush any remaining interceptor buffer before processing message_end
+			if (this._extensionRunner) {
+				const flushedEvent = this._extensionRunner.flushAndClearBuffer();
+				if (flushedEvent) {
+					this._emit({
+						type: "message_update",
+						message: event.message,
+						assistantMessageEvent: flushedEvent.assistantMessageEvent,
+					} as AgentEvent);
+				}
+				// Only reset abort counter on successful (non-aborted) message_end
+				const msg = event.message as AssistantMessage;
+				if (msg.role === "assistant" && msg.stopReason !== "aborted") {
+					this._extensionRunner.resetInterceptorAbortCount();
+				}
+			}
+
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
 				// Persist as CustomMessageEntry
@@ -384,6 +434,22 @@ export class AgentSession {
 		if (event.type === "agent_end" && this._lastAssistantMessage) {
 			const msg = this._lastAssistantMessage;
 			this._lastAssistantMessage = undefined;
+
+			// Check for interceptor abort - retry with injected reason
+			if (this._extensionRunner) {
+				const abortReason = this._extensionRunner.consumePendingAbortReason();
+				if (abortReason) {
+					this._extensionRunner.injectContextMessage(abortReason);
+					const messages = this.agent.state.messages;
+					if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+						this.agent.replaceMessages(messages.slice(0, -1));
+					}
+					setTimeout(() => {
+						this.agent.continue().catch(() => {});
+					}, 0);
+					return;
+				}
+			}
 
 			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this._isRetryableError(msg)) {
@@ -454,13 +520,6 @@ export class AgentSession {
 			const extensionEvent: MessageStartEvent = {
 				type: "message_start",
 				message: event.message,
-			};
-			await this._extensionRunner.emit(extensionEvent);
-		} else if (event.type === "message_update") {
-			const extensionEvent: MessageUpdateEvent = {
-				type: "message_update",
-				message: event.message,
-				assistantMessageEvent: event.assistantMessageEvent,
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "message_end") {
@@ -1956,6 +2015,14 @@ export class AgentSession {
 				getSystemPrompt: () => this.systemPrompt,
 			},
 		);
+
+		runner.setAutoFlushCallback((flushedEvent) => {
+			this._emit({
+				type: "message_update",
+				message: flushedEvent.message,
+				assistantMessageEvent: flushedEvent.assistantMessageEvent,
+			} as AgentEvent);
+		});
 	}
 
 	private _buildRuntime(options: {
