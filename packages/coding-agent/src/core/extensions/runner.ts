@@ -17,6 +17,7 @@ import type {
 	ContextEvent,
 	ContextEventResult,
 	ContextUsage,
+	EmitMessageUpdateResult,
 	Extension,
 	ExtensionActions,
 	ExtensionCommandContext,
@@ -42,6 +43,7 @@ import type {
 	SessionBeforeForkResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
+	StreamDecision,
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolResultEvent,
@@ -219,6 +221,19 @@ export class ExtensionRunner {
 	private shutdownHandler: ShutdownHandler = () => {};
 	private shortcutDiagnostics: ResourceDiagnostic[] = [];
 	private commandDiagnostics: ResourceDiagnostic[] = [];
+
+	// Streaming interceptor state
+	private _streamBuffer: {
+		tokens: string;
+		events: MessageUpdateEvent[];
+		flushTimer: ReturnType<typeof setTimeout> | null;
+		maxHoldMs: number;
+	} | null = null;
+	private _hasInterceptor = false;
+	private _pendingAbortReason: string | undefined = undefined;
+	private _interceptorAbortCount = 0;
+	private _pendingContextInjection: string | undefined = undefined;
+	private _onAutoFlush: ((event: MessageUpdateEvent) => void) | undefined = undefined;
 
 	constructor(
 		extensions: Extension[],
@@ -622,6 +637,264 @@ export class ExtensionRunner {
 		};
 	}
 
+	async emitMessageUpdate(event: MessageUpdateEvent): Promise<EmitMessageUpdateResult> {
+		const subtype = event.assistantMessageEvent.type;
+
+		// Fast path: no interceptor registered yet
+		if (!this._hasInterceptor) {
+			const ctx = this.createContext();
+			for (const ext of this.extensions) {
+				const handlers = ext.handlers.get("message_update");
+				if (!handlers || handlers.length === 0) continue;
+				for (const handler of handlers) {
+					try {
+						const result = await handler(event, ctx);
+						if (result !== undefined && result !== null) {
+							this._hasInterceptor = true;
+							return this._processInterceptorDecision(event, result as StreamDecision);
+						}
+					} catch (err) {
+						this.emitError({
+							extensionPath: ext.path,
+							event: "message_update",
+							error: err instanceof Error ? err.message : String(err),
+							stack: err instanceof Error ? err.stack : undefined,
+						});
+					}
+				}
+			}
+			return { outcome: "emit", event };
+		}
+
+		// Subtype routing
+		const forceFlushTypes = new Set(["text_end", "done", "error"]);
+		if (subtype !== "text_delta" && !forceFlushTypes.has(subtype)) {
+			await this._callObservers(event);
+			return { outcome: "emit", event };
+		}
+		if (forceFlushTypes.has(subtype)) {
+			const flushedEvent = this._forceFlush();
+			await this._callObservers(event);
+			return { outcome: "emit", event, flushedEvent };
+		}
+
+		// text_delta: buffer and call interceptor
+		if (!this._streamBuffer) {
+			this._streamBuffer = { tokens: "", events: [], flushTimer: null, maxHoldMs: 500 };
+		}
+		const delta = (event.assistantMessageEvent as { delta: string }).delta;
+		this._streamBuffer.tokens += delta;
+		this._streamBuffer.events.push(event);
+		if (this._streamBuffer.flushTimer === null) {
+			this._streamBuffer.flushTimer = setTimeout(
+				() => this._timeoutFlush(),
+				this._streamBuffer.maxHoldMs,
+			);
+		}
+
+		// Call interceptor (V1: first non-void return wins)
+		const ctx = this.createContext();
+		let decision: StreamDecision | undefined;
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get("message_update");
+			if (!handlers || handlers.length === 0) continue;
+			for (const handler of handlers) {
+				try {
+					const result = await handler(event, ctx);
+					if (result !== undefined && result !== null) {
+						decision = result as StreamDecision;
+						break;
+					}
+				} catch (err) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: "message_update",
+						error: err instanceof Error ? err.message : String(err),
+						stack: err instanceof Error ? err.stack : undefined,
+					});
+				}
+			}
+			if (decision) break;
+		}
+
+		if (!decision) return { outcome: "hold" };
+		return this._processInterceptorDecision(event, decision);
+	}
+
+	private _processInterceptorDecision(
+		event: MessageUpdateEvent,
+		decision: StreamDecision,
+	): EmitMessageUpdateResult {
+		switch (decision.action) {
+			case "pass": {
+				const flushedEvent = this._flushBuffer(event);
+				return { outcome: "emit", event: flushedEvent };
+			}
+			case "modify": {
+				const modifiedEvent = this._flushBufferModified(event, decision.text);
+				return { outcome: "emit_modified", event: modifiedEvent };
+			}
+			case "suppress": {
+				this._clearBuffer();
+				return { outcome: "suppressed" };
+			}
+			case "abort": {
+				if (this._interceptorAbortCount >= 3) {
+					console.warn(
+						"[extensions] Interceptor abort limit (3) reached, downgrading to suppress",
+					);
+					this._clearBuffer();
+					return { outcome: "suppressed" };
+				}
+				this._interceptorAbortCount++;
+				this._clearBuffer();
+				this._pendingAbortReason = decision.reason;
+				this.abortFn();
+				return { outcome: "aborted" };
+			}
+		}
+	}
+
+	private _flushBuffer(latestEvent: MessageUpdateEvent): MessageUpdateEvent {
+		const tokens = this._streamBuffer?.tokens ?? "";
+		this._resetBuffer();
+		if (!tokens) return latestEvent;
+		return {
+			...latestEvent,
+			assistantMessageEvent: {
+				...latestEvent.assistantMessageEvent,
+				delta: tokens,
+			} as MessageUpdateEvent["assistantMessageEvent"],
+		};
+	}
+
+	private _flushBufferModified(
+		latestEvent: MessageUpdateEvent,
+		text: string,
+	): MessageUpdateEvent {
+		this._resetBuffer();
+		return {
+			...latestEvent,
+			assistantMessageEvent: {
+				...latestEvent.assistantMessageEvent,
+				delta: text,
+			} as MessageUpdateEvent["assistantMessageEvent"],
+		};
+	}
+
+	private _forceFlush(): MessageUpdateEvent | undefined {
+		if (!this._streamBuffer?.tokens) return undefined;
+		const tokens = this._streamBuffer.tokens;
+		const lastEvent =
+			this._streamBuffer.events[this._streamBuffer.events.length - 1];
+		this._resetBuffer();
+		if (!lastEvent) return undefined;
+		return {
+			...lastEvent,
+			assistantMessageEvent: {
+				...lastEvent.assistantMessageEvent,
+				delta: tokens,
+			} as MessageUpdateEvent["assistantMessageEvent"],
+		};
+	}
+
+	private _timeoutFlush(): void {
+		if (!this._streamBuffer?.tokens) return;
+		console.warn(
+			"[extensions] Streaming interceptor timeout - auto-flushing buffer",
+		);
+		const tokens = this._streamBuffer.tokens;
+		const lastEvent =
+			this._streamBuffer.events[this._streamBuffer.events.length - 1];
+		this._resetBuffer();
+		if (lastEvent && this._onAutoFlush) {
+			this._onAutoFlush({
+				...lastEvent,
+				assistantMessageEvent: {
+					...lastEvent.assistantMessageEvent,
+					delta: tokens,
+				} as MessageUpdateEvent["assistantMessageEvent"],
+			});
+		}
+	}
+
+	private _clearBuffer(): void {
+		if (this._streamBuffer) {
+			if (this._streamBuffer.flushTimer !== null) {
+				clearTimeout(this._streamBuffer.flushTimer);
+			}
+			this._streamBuffer = null;
+		}
+	}
+
+	private _resetBuffer(): void {
+		if (this._streamBuffer) {
+			if (this._streamBuffer.flushTimer !== null) {
+				clearTimeout(this._streamBuffer.flushTimer);
+			}
+			this._streamBuffer.tokens = "";
+			this._streamBuffer.events = [];
+			this._streamBuffer.flushTimer = null;
+		}
+	}
+
+	private async _callObservers(event: MessageUpdateEvent): Promise<void> {
+		const ctx = this.createContext();
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get("message_update");
+			if (!handlers || handlers.length === 0) continue;
+			for (const handler of handlers) {
+				try {
+					await handler(event, ctx);
+				} catch (err) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: "message_update",
+						error: err instanceof Error ? err.message : String(err),
+						stack: err instanceof Error ? err.stack : undefined,
+					});
+				}
+			}
+		}
+	}
+
+	flushAndClearBuffer(): MessageUpdateEvent | undefined {
+		if (!this._streamBuffer?.tokens) {
+			this._clearBuffer();
+			return undefined;
+		}
+		const tokens = this._streamBuffer.tokens;
+		const lastEvent =
+			this._streamBuffer.events[this._streamBuffer.events.length - 1];
+		this._clearBuffer();
+		if (!lastEvent) return undefined;
+		return {
+			...lastEvent,
+			assistantMessageEvent: {
+				...lastEvent.assistantMessageEvent,
+				delta: tokens,
+			} as MessageUpdateEvent["assistantMessageEvent"],
+		};
+	}
+
+	consumePendingAbortReason(): string | undefined {
+		const reason = this._pendingAbortReason;
+		this._pendingAbortReason = undefined;
+		return reason;
+	}
+
+	injectContextMessage(text: string): void {
+		this._pendingContextInjection = text;
+	}
+
+	resetInterceptorAbortCount(): void {
+		this._interceptorAbortCount = 0;
+	}
+
+	setAutoFlushCallback(cb: (event: MessageUpdateEvent) => void): void {
+		this._onAutoFlush = cb;
+	}
+
 	async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
 		const ctx = this.createContext();
 		let result: ToolCallEventResult | undefined;
@@ -701,6 +974,19 @@ export class ExtensionRunner {
 					});
 				}
 			}
+		}
+
+		// Inject pending context message from interceptor abort
+		if (this._pendingContextInjection) {
+			const injectionText = this._pendingContextInjection;
+			this._pendingContextInjection = undefined;
+			currentMessages = [
+				...currentMessages,
+				{
+					role: "user",
+					content: [{ type: "text", text: `[System: ${injectionText}]` }],
+				} as AgentMessage,
+			];
 		}
 
 		return currentMessages;
