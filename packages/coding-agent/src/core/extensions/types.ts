@@ -843,6 +843,24 @@ export interface ToolResultEventResult {
 	isError?: boolean;
 }
 
+/** Decision returned by a message_update interceptor after evaluating buffered tokens. */
+export type StreamDecision =
+	| { action: "pass" }
+	| { action: "modify"; text: string }
+	| { action: "suppress" }
+	| { action: "abort"; reason: string };
+
+/** Result type for message_update handlers that opt into interception. */
+export type MessageUpdateEventResult = StreamDecision | void;
+
+/** Result returned by emitMessageUpdate() to the caller. */
+export type EmitMessageUpdateResult =
+	| { outcome: "emit"; event: MessageUpdateEvent; flushedEvent?: MessageUpdateEvent }
+	| { outcome: "emit_modified"; event: MessageUpdateEvent }
+	| { outcome: "hold" }
+	| { outcome: "suppressed" }
+	| { outcome: "aborted" };
+
 export interface BeforeAgentStartEventResult {
 	message?: Pick<CustomMessage, "customType" | "content" | "display" | "details">;
 	/** Replace the system prompt for this turn. If multiple extensions return this, they are chained. */
@@ -942,7 +960,7 @@ export interface ExtensionAPI {
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
 	on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;
-	on(event: "message_update", handler: ExtensionHandler<MessageUpdateEvent>): void;
+	on(event: "message_update", handler: ExtensionHandler<MessageUpdateEvent, MessageUpdateEventResult>): void;
 	on(event: "message_end", handler: ExtensionHandler<MessageEndEvent>): void;
 	on(event: "tool_execution_start", handler: ExtensionHandler<ToolExecutionStartEvent>): void;
 	on(event: "tool_execution_update", handler: ExtensionHandler<ToolExecutionUpdateEvent>): void;

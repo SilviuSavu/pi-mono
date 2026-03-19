@@ -33,6 +33,7 @@ import type {
 	InputEventResult,
 	InputSource,
 	MessageRenderer,
+	MessageUpdateEvent,
 	RegisteredCommand,
 	RegisteredTool,
 	ResourcesDiscoverEvent,
@@ -108,6 +109,7 @@ type RunnerEmitEvent = Exclude<
 	| BeforeAgentStartEvent
 	| ResourcesDiscoverEvent
 	| InputEvent
+	| MessageUpdateEvent
 >;
 
 type SessionBeforeEvent = Extract<
