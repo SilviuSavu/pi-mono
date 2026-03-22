@@ -1275,6 +1275,9 @@ export class AgentSession {
 
 		const previousModel = this.model;
 		this.agent.setModel(model);
+		// Enable preserved thinking for Z.AI models (retains reasoning across turns)
+		const isZai = model.provider === "zai" || model.baseUrl?.includes("api.z.ai");
+		this.agent.preserveThinking = isZai || undefined;
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
 
@@ -1333,6 +1336,8 @@ export class AgentSession {
 
 		// Apply model
 		this.agent.setModel(next.model);
+		const isZaiScoped = next.model.provider === "zai" || next.model.baseUrl?.includes("api.z.ai");
+		this.agent.preserveThinking = isZaiScoped || undefined;
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
 
@@ -1362,6 +1367,8 @@ export class AgentSession {
 		}
 
 		this.agent.setModel(nextModel);
+		const isZaiCycle = nextModel.provider === "zai" || nextModel.baseUrl?.includes("api.z.ai");
+		this.agent.preserveThinking = isZaiCycle || undefined;
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
 
@@ -2440,6 +2447,8 @@ export class AgentSession {
 			);
 			if (match) {
 				this.agent.setModel(match);
+				const isZaiRestore = match.provider === "zai" || match.baseUrl?.includes("api.z.ai");
+				this.agent.preserveThinking = isZaiRestore || undefined;
 				await this._emitModelSelect(match, previousModel, "restore");
 			}
 		}
